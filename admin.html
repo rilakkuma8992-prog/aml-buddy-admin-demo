@@ -342,6 +342,7 @@
     .tag.published{color:var(--green-700);background:var(--green-100)}
     .tag.withdrawn{color:var(--red-700);background:var(--red-100)}
     .tag.archived{color:var(--purple-700);background:var(--purple-100)}
+    .tag.deleted{color:var(--red-700);background:var(--red-100)}
     .tag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
     .row-actions{display:flex;gap:6px}
     .icon-btn{
@@ -350,6 +351,10 @@
       font-size:11px;font-weight:850;
     }
     .icon-btn:hover{color:var(--blue-600);border-color:var(--blue-600)}
+    .icon-btn.danger:hover{color:var(--red-700);border-color:var(--red-700)}
+    .btn:disabled,.icon-btn:disabled{
+      opacity:.45;cursor:not-allowed;box-shadow:none;
+    }
     .empty{
       padding:50px 20px;text-align:center;color:var(--muted);
     }
@@ -517,6 +522,11 @@
     .toast-mark{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--green-600);font-size:11px;font-weight:900}
     .toast-title{font-size:12px;font-weight:850}
     .toast-text{font-size:10px;color:rgba(255,255,255,.7);margin-top:3px}
+    .auth-wrap{display:flex;align-items:center;gap:8px}
+    .auth-email{
+      max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+      color:var(--muted);font-size:11px;font-weight:750;
+    }
 
     @media (max-width:1120px){
       .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -623,8 +633,11 @@
           <select class="role-select" id="roleSelect">
             <option value="editor">Editor｜編輯者</option>
             <option value="reviewer">Reviewer｜覆核者</option>
-            <option value="admin">Administrator｜管理者</option>
           </select>
+        </div>
+        <div class="auth-wrap" id="authWrap">
+          <span class="auth-email" id="authEmail">尚未登入</span>
+          <button class="btn btn-secondary btn-sm" type="button" data-action="login">登入</button>
         </div>
         <div class="avatar" aria-label="目前使用者">ST</div>
       </header>
@@ -812,7 +825,7 @@
                     </div>
                     <div class="field">
                       <label class="required" for="editOwner">內容負責人</label>
-                      <input class="input" id="editOwner" value="王小明｜AML 政策科">
+                      <input class="input" id="editOwner" value="王小明">
                     </div>
                     <div class="field">
                       <label for="editEffective">內容生效日</label>
@@ -1014,6 +1027,15 @@
   </div>
 
   <script>
+    window.AML_BUDDY_SUPABASE = {
+      url: "",
+      anonKey: "",
+      table: "aml_buddy_faqs",
+      auditTable: "aml_buddy_audit_logs"
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
     "use strict";
 
     const STORAGE_KEY = "amlBuddyAdminOfficialFaqs.v2";
@@ -1021,6 +1043,14 @@
     const HAS_DYNAMIC_API = location.protocol === "file:" || ["localhost","127.0.0.1"].includes(location.hostname);
     const API_BASE = location.protocol === "file:" ? "http://127.0.0.1:"+(location.port || "3000") : "";
     const API_FAQS_URL = API_BASE + "/api/faqs";
+    const SUPABASE_CONFIG = window.AML_BUDDY_SUPABASE || {};
+    const SUPABASE_TABLE = SUPABASE_CONFIG.table || "aml_buddy_faqs";
+    const SUPABASE_AUDIT_TABLE = SUPABASE_CONFIG.auditTable || "aml_buddy_audit_logs";
+    const HAS_SUPABASE_CONFIG = Boolean(SUPABASE_CONFIG.url && SUPABASE_CONFIG.anonKey && window.supabase?.createClient);
+    const supabaseClient = HAS_SUPABASE_CONFIG
+      ? window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey)
+      : null;
+    const CURRENT_EDITOR_NAME = "王小明";
     const todayText = (() => {
       const date = new Date();
       const pad = n => String(n).padStart(2,"0");
@@ -1032,7 +1062,8 @@
       approved:{label:"已核准",cls:"approved"},
       published:{label:"已發布",cls:"published"},
       withdrawn:{label:"已下架",cls:"withdrawn"},
-      archived:{label:"已封存",cls:"archived"}
+      archived:{label:"已封存",cls:"archived"},
+      deleted:{label:"已刪除",cls:"deleted"}
     };
     function getFrontendUrl(){
       if(location.hostname.endsWith(".github.io")){
@@ -2591,8 +2622,25 @@
     let editingId = null;
     let toastTimer = null;
     let publishedBaselines = new Map();
+    let currentUser = null;
 
     function clone(value){ return JSON.parse(JSON.stringify(value)); }
+    function currentRole(){ return document.getElementById("roleSelect").value; }
+    function isReviewer(){ return currentRole()==="reviewer"; }
+    function isEditor(){ return currentRole()==="editor"; }
+    function canCreateFaq(){ return isEditor(); }
+    function ownerName(owner){ return String(owner || "").split("｜")[0].trim(); }
+    function canDeleteFaq(faq){
+      if(!faq || faq.status==="deleted") return false;
+      if(isReviewer()) return true;
+      return isEditor() && ["draft","pending"].includes(faq.status) && ownerName(faq.owner)===CURRENT_EDITOR_NAME;
+    }
+    function activeFaqs(){ return state.faqs.filter(faq=>faq.status!=="deleted"); }
+    function isAuthenticated(){ return !HAS_SUPABASE_CONFIG || Boolean(currentUser); }
+    function currentAuditUser(){
+      if(currentUser?.email) return currentUser.email;
+      return isReviewer() ? "覆核者（Demo）" : "Stanley（Demo）";
+    }
     function findSeedFaq(id){
       return seedData.faqs.find(item=>item.id===id);
     }
@@ -2614,7 +2662,9 @@
         ref:clone(faq.ref || {zh:"",en:"",ja:""}),
         source:faq.source,
         article:faq.article,
-        link:faq.link
+        link:faq.link,
+        deletedAt:faq.deletedAt || "",
+        deletedBy:faq.deletedBy || ""
       };
     }
     function getPreviousFaq(faq){
@@ -2690,7 +2740,126 @@
         })
         .catch(()=>useXhr());
     }
+    function normalizeSupabaseFaqRow(row){
+      const payload = row?.payload && typeof row.payload==="object" ? clone(row.payload) : {};
+      return {
+        ...payload,
+        id:row.id || payload.id,
+        status:row.status || payload.status || "draft",
+        biz:payload.biz || row.biz || "企金",
+        aspect:payload.aspect || row.aspect || "法規面",
+        category:payload.category || row.category || "Others",
+        owner:payload.owner || row.owner || CURRENT_EDITOR_NAME,
+        version:payload.version || row.version || "v0.1",
+        updated:payload.updated || row.updated_on || todayText,
+        effective:payload.effective || row.effective || todayText,
+        nextReview:payload.nextReview || row.next_review || "2027-07-27",
+        q:clone(payload.q || {zh:"",en:"",ja:""}),
+        a:clone(payload.a || {zh:"",en:"",ja:""}),
+        ref:clone(payload.ref || {zh:"",en:"",ja:""}),
+        source:payload.source || "",
+        article:payload.article || "",
+        link:payload.link || "",
+        previous:payload.previous || null,
+        deletedAt:payload.deletedAt || row.deleted_at || "",
+        deletedBy:payload.deletedBy || ""
+      };
+    }
+    function makeSupabaseFaqRow(faq){
+      const payload = faqSnapshot(faq);
+      payload.status = faq.status;
+      if(faq.previous) payload.previous = faqSnapshot(faq.previous);
+      return {
+        id:faq.id,
+        status:faq.status,
+        biz:faq.biz,
+        aspect:faq.aspect,
+        category:faq.category,
+        owner:faq.owner,
+        version:faq.version,
+        updated_on:faq.updated || null,
+        effective:faq.effective || null,
+        next_review:faq.nextReview || null,
+        payload,
+        deleted_at:faq.status==="deleted" ? (faq.deletedAt || new Date().toISOString()) : null,
+        updated_by:currentUser?.id || null,
+        updated_at:new Date().toISOString()
+      };
+    }
+    async function loadFaqsFromSupabase(){
+      if(!supabaseClient) return false;
+      const {data,error} = await supabaseClient
+        .from(SUPABASE_TABLE)
+        .select("id,status,biz,aspect,category,owner,version,updated_on,effective,next_review,payload,deleted_at")
+        .order("id",{ascending:true});
+      if(error) throw error;
+      const serverFaqs = (data || []).map(normalizeSupabaseFaqRow);
+      const serverIds = new Set(serverFaqs.map(faq=>faq.id));
+      const localEditable = state.faqs.filter(faq =>
+        !serverIds.has(faq.id) && ["draft","pending","approved"].includes(faq.status)
+      );
+      publishedBaselines = new Map(
+        serverFaqs
+          .filter(faq=>faq.status==="published")
+          .map(faq=>[faq.id,faqSnapshot(faq)])
+      );
+      state = normalizeState({...state,faqs:[...serverFaqs,...localEditable]});
+      persist({sync:false});
+      repairPreviousSnapshots();
+      refreshCurrentScreen();
+      return true;
+    }
+    async function syncFaqsToSupabase(options = {}){
+      if(!supabaseClient) return false;
+      if(!isAuthenticated()){
+        showToast("請先登入","登入後才能寫入共用題庫。");
+        return false;
+      }
+      const faqs = options.faq ? [options.faq] : state.faqs;
+      const rows = faqs.map(makeSupabaseFaqRow);
+      if(rows.length===0) return true;
+      const {error} = await supabaseClient.from(SUPABASE_TABLE).upsert(rows,{onConflict:"id"});
+      if(error) throw error;
+      return true;
+    }
+    async function syncAuditToSupabase(item){
+      if(!supabaseClient || !isAuthenticated()) return;
+      await supabaseClient.from(SUPABASE_AUDIT_TABLE).insert({
+        time:item.time,
+        user_name:item.user,
+        action:item.action,
+        target:item.target
+      });
+    }
+    async function loadAuditFromSupabase(){
+      if(!supabaseClient || !isAuthenticated()) return;
+      const {data,error} = await supabaseClient
+        .from(SUPABASE_AUDIT_TABLE)
+        .select("time,user_name,action,target")
+        .order("time",{ascending:false})
+        .limit(30);
+      if(error) return;
+      state.audit = (data || []).map(row=>({
+        time:row.time,
+        user:row.user_name,
+        action:row.action,
+        target:row.target
+      }));
+      persist({sync:false});
+      if(currentScreen==="versions") renderVersions();
+      if(currentScreen==="dashboard") renderDashboard();
+    }
     async function loadFaqsFromServer(){
+      if(HAS_SUPABASE_CONFIG){
+        try{
+          await loadFaqsFromSupabase();
+          await loadAuditFromSupabase();
+        }catch(error){
+          console.warn("loadFaqsFromSupabase skipped",error);
+          showToast("Supabase 讀取失敗","請確認 URL、anon key、資料表與 RLS 設定。");
+        }
+        return;
+      }
       if(!HAS_DYNAMIC_API) return;
       try{
         const payload = await requestJson(API_FAQS_URL+"?format=full");
@@ -2736,6 +2905,11 @@
         const localFaq = localById.get(serverFaq.id);
         if(!localFaq){
           return serverFaq;
+        }
+
+        if(localFaq.status==="deleted"){
+          shouldSync = true;
+          return localFaq;
         }
 
         if(["draft","pending"].includes(localFaq.status)){
@@ -2789,6 +2963,21 @@
       }
     }
     async function syncFaqsToServer(options = {}){
+      if(HAS_SUPABASE_CONFIG){
+        try{
+          const synced = await syncFaqsToSupabase(options);
+          if(options.toast && synced){
+            showToast("已同步至 Supabase","共用題庫資料已更新。");
+          }
+          return synced;
+        }catch(error){
+          console.warn("syncFaqsToSupabase failed",error);
+          if(options.toast){
+            showToast("Supabase 同步失敗","請確認已登入且資料表權限允許寫入。");
+          }
+          return false;
+        }
+      }
       if(!HAS_DYNAMIC_API){
         if(options.toast){
           showToast("已儲存在此瀏覽器","GitHub Pages 為靜態網站，後台變更只會保存在目前瀏覽器；若要公開給其他人，需重新上傳題庫檔。");
@@ -2804,7 +2993,9 @@
             .map(faq=>[faq.id,faq])
         );
         state.faqs.forEach(faq=>{
-          if(faq.status==="published"){
+          if(faq.status==="deleted"){
+            publishedById.delete(faq.id);
+          }else if(faq.status==="published"){
             const publishedFaq = faqSnapshot(faq);
             publishedFaq.status = "published";
             delete publishedFaq.previous;
@@ -2853,8 +3044,10 @@
       return date.getFullYear()+"-"+pad(date.getMonth()+1)+"-"+pad(date.getDate())+" "+pad(date.getHours())+":"+pad(date.getMinutes());
     }
     function addAudit(action,target,user){
-      state.audit.unshift({time:nowStamp(),user:user || "Stanley（Demo）",action,target});
+      const item = {time:nowStamp(),user:user || currentAuditUser(),action,target};
+      state.audit.unshift(item);
       state.audit = state.audit.slice(0,30);
+      syncAuditToSupabase(item).catch(error=>console.warn("audit sync failed",error));
     }
     function showToast(title,text){
       document.getElementById("toastTitle").textContent = title;
@@ -2864,9 +3057,98 @@
       clearTimeout(toastTimer);
       toastTimer = setTimeout(()=>toast.classList.remove("show"),3000);
     }
+    function updateAuthUi(){
+      const authEmail = document.getElementById("authEmail");
+      const authButton = document.querySelector("[data-action='login']");
+      if(authEmail){
+        authEmail.textContent = HAS_SUPABASE_CONFIG
+          ? (currentUser?.email || "尚未登入")
+          : "本機 Demo";
+      }
+      if(authButton){
+        authButton.textContent = HAS_SUPABASE_CONFIG && currentUser ? "登出" : "登入";
+      }
+      updateRoleUi();
+    }
+    function updateRoleUi(){
+      const blockCreate = !canCreateFaq() || !isAuthenticated();
+      document.querySelectorAll("[data-action='new-faq']").forEach(btn=>{
+        btn.disabled = blockCreate;
+        btn.title = !isAuthenticated()
+          ? "請先登入"
+          : canCreateFaq() ? "" : "僅 Editor 可新增 FAQ";
+      });
+      const editorLocked = !isAuthenticated();
+      ["saveDraftBtn","submitReviewBtn","previewFaqBtn"].forEach(id=>{
+        const btn = document.getElementById(id);
+        if(btn) btn.disabled = editorLocked;
+      });
+    }
+    function requireAuth(actionLabel){
+      if(isAuthenticated()) return true;
+      showToast("請先登入","登入後才能"+(actionLabel || "執行此操作")+"。");
+      openLoginModal();
+      return false;
+    }
+    function openLoginModal(){
+      if(!HAS_SUPABASE_CONFIG){
+        showToast("尚未設定 Supabase","請先在 admin.html 填入 Supabase URL 與 anon key。");
+        return;
+      }
+      if(currentUser){
+        signOut();
+        return;
+      }
+      openModal("登入後台",
+        '<div class="form-grid">'+
+          '<div class="field full"><label class="required" for="loginEmail">Email</label><input class="input" id="loginEmail" type="email" autocomplete="username"></div>'+
+          '<div class="field full"><label class="required" for="loginPassword">Password</label><input class="input" id="loginPassword" type="password" autocomplete="current-password"></div>'+
+        '</div><div class="hint" style="margin-top:10px">使用 Supabase Auth 建立的 email/password 帳號登入；未登入不能新增、編輯、審核或刪除。</div>',
+        '<button class="btn btn-secondary" type="button" data-action="close-modal">取消</button><button class="btn btn-primary" type="button" data-action="confirm-login">登入</button>'
+      );
+    }
+    async function confirmLogin(){
+      const email = document.getElementById("loginEmail")?.value.trim();
+      const password = document.getElementById("loginPassword")?.value;
+      if(!email || !password){
+        showToast("請輸入登入資訊","Email 與 Password 都是必要欄位。");
+        return;
+      }
+      const {data,error} = await supabaseClient.auth.signInWithPassword({email,password});
+      if(error){
+        showToast("登入失敗",error.message);
+        return;
+      }
+      currentUser = data.user || data.session?.user || null;
+      closeModal();
+      updateAuthUi();
+      await loadFaqsFromServer();
+      showToast("已登入",currentUser?.email || "Supabase 使用者");
+    }
+    async function signOut(){
+      if(supabaseClient){
+        await supabaseClient.auth.signOut();
+      }
+      currentUser = null;
+      updateAuthUi();
+      showToast("已登出","後台寫入功能已鎖定。");
+    }
+    async function initAuth(){
+      if(!supabaseClient){
+        updateAuthUi();
+        return;
+      }
+      const {data} = await supabaseClient.auth.getSession();
+      currentUser = data.session?.user || null;
+      supabaseClient.auth.onAuthStateChange((_event, session)=>{
+        currentUser = session?.user || null;
+        updateAuthUi();
+      });
+      updateAuthUi();
+    }
     function updateCounts(){
-      document.getElementById("navContentCount").textContent = state.faqs.length;
-      document.getElementById("navReviewCount").textContent = state.faqs.filter(f=>f.status==="pending").length;
+      document.getElementById("navContentCount").textContent = activeFaqs().length;
+      document.getElementById("navReviewCount").textContent = activeFaqs().filter(f=>f.status==="pending").length;
     }
     function showScreen(name){
       currentScreen = name;
@@ -2894,11 +3176,12 @@
     }
 
     function renderDashboard(){
+      const faqs = activeFaqs();
       const counts = {
-        all:state.faqs.length,
-        pending:state.faqs.filter(f=>f.status==="pending").length,
-        published:state.faqs.filter(f=>f.status==="published").length,
-        review:state.faqs.filter(f=>f.nextReview && f.nextReview<="2027-08-01").length
+        all:faqs.length,
+        pending:faqs.filter(f=>f.status==="pending").length,
+        published:faqs.filter(f=>f.status==="published").length,
+        review:faqs.filter(f=>f.nextReview && f.nextReview<="2027-08-01").length
       };
       document.getElementById("stats").innerHTML = [
         ["blue","ALL","全部 FAQ",counts.all,"涵蓋企金與消金示範內容"],
@@ -2916,21 +3199,26 @@
       const query = document.getElementById("faqSearch").value.trim().toLowerCase();
       const status = document.getElementById("statusFilter").value;
       const biz = document.getElementById("bizFilter").value;
-      const rows = state.faqs.filter(faq=>{
+      const rows = activeFaqs().filter(faq=>{
         const haystack = [faq.id,faq.q.zh,faq.a.zh,faq.ref.zh,faq.category,faq.owner].join(" ").toLowerCase();
         const bizMatches = !biz || faq.biz===biz || (biz==="企金" && faq.biz==="企金／消金") || (biz==="消金" && faq.biz==="企金／消金");
         return (!query || haystack.includes(query)) && (!status || faq.status===status) && bizMatches;
       });
       document.getElementById("faqTableBody").innerHTML = rows.map(faq=>
+        {
+          const deleteDisabled = canDeleteFaq(faq) ? "" : " disabled";
+          return (
         '<tr>'+
           '<td><span class="faq-id">'+escapeHtml(faq.id)+'</span></td>'+
           '<td class="question-cell"><div class="question-text">'+escapeHtml(faq.q.zh)+'</div><div class="question-meta">'+escapeHtml(faq.aspect)+' ／ '+escapeHtml(faq.category)+' ／ '+escapeHtml(faq.version)+'</div></td>'+
           '<td>'+escapeHtml(faq.biz)+'</td>'+
-          '<td>'+escapeHtml(faq.owner.split("｜")[0])+'</td>'+
+          '<td>'+escapeHtml(ownerName(faq.owner))+'</td>'+
           '<td>'+escapeHtml(faq.updated)+'</td>'+
           '<td>'+statusTag(faq.status)+'</td>'+
-          '<td><div class="row-actions"><button class="icon-btn" type="button" data-preview-id="'+faq.id+'" title="前台預覽">預</button>'+(faq.status==="approved"?'<button class="icon-btn" type="button" data-publish-id="'+faq.id+'" title="發布至前台">發</button>':'')+'<button class="icon-btn" type="button" data-edit-id="'+faq.id+'" title="編輯內容">編</button></div></td>'+
+          '<td><div class="row-actions"><button class="icon-btn" type="button" data-preview-id="'+faq.id+'" title="前台預覽">預</button>'+(faq.status==="approved"?'<button class="icon-btn" type="button" data-publish-id="'+faq.id+'" title="發布至前台">發</button>':'')+'<button class="icon-btn" type="button" data-edit-id="'+faq.id+'" title="編輯內容">編</button><button class="icon-btn danger" type="button" data-delete-id="'+faq.id+'" title="刪除問題"'+deleteDisabled+'>刪</button></div></td>'+
         '</tr>'
+          );
+        }
       ).join("");
       document.getElementById("faqEmpty").classList.toggle("hidden",rows.length>0);
       document.getElementById("faqTableBody").parentElement.classList.toggle("hidden",rows.length===0);
@@ -2938,17 +3226,23 @@
     }
 
     function renderReviewList(){
-      const pending = state.faqs.filter(f=>f.status==="pending");
-      const canReview = ["reviewer","admin"].includes(document.getElementById("roleSelect").value);
+      const pending = activeFaqs().filter(f=>f.status==="pending");
+      const canReview = isReviewer();
       document.getElementById("reviewList").innerHTML = pending.map(faq=>
+        {
+          const deleteDisabled = canDeleteFaq(faq) ? "" : " disabled";
+          return (
         '<article class="review-card">'+
           '<div><div class="review-kicker">'+statusTag(faq.status)+'<span class="faq-id">'+escapeHtml(faq.id)+' · '+escapeHtml(faq.version)+'</span></div>'+
           '<div class="review-title">'+escapeHtml(faq.q.zh)+'</div>'+
-          '<div class="review-meta"><span>'+escapeHtml(faq.biz)+'／'+escapeHtml(faq.aspect)+'／'+escapeHtml(faq.category)+'</span><span>送審人：'+escapeHtml(faq.owner.split("｜")[0])+'</span><span>更新：'+escapeHtml(faq.updated)+'</span></div></div>'+
+          '<div class="review-meta"><span>'+escapeHtml(faq.biz)+'／'+escapeHtml(faq.aspect)+'／'+escapeHtml(faq.category)+'</span><span>送審人：'+escapeHtml(ownerName(faq.owner))+'</span><span>更新：'+escapeHtml(faq.updated)+'</span></div></div>'+
           '<div class="review-actions"><button class="btn btn-secondary btn-sm" type="button" data-compare-id="'+faq.id+'">檢視差異</button>'+
           '<button class="btn btn-danger-soft btn-sm" type="button" data-return-id="'+faq.id+'" '+(canReview?'':'disabled')+'>退回</button>'+
-          '<button class="btn btn-primary btn-sm" type="button" data-approve-id="'+faq.id+'" '+(canReview?'':'disabled')+'>核准</button></div>'+
+          '<button class="btn btn-primary btn-sm" type="button" data-approve-id="'+faq.id+'" '+(canReview?'':'disabled')+'>核准</button>'+
+          '<button class="btn btn-danger-soft btn-sm" type="button" data-delete-id="'+faq.id+'" '+deleteDisabled+'>刪除</button></div>'+
         '</article>'
+          );
+        }
       ).join("");
       document.getElementById("reviewEmpty").classList.toggle("hidden",pending.length>0);
       updateCounts();
@@ -2972,9 +3266,14 @@
     function setField(id,value){ document.getElementById(id).value = value || ""; }
 
     function startEditor(id){
+      if(!id && !canCreateFaq()){
+        showToast("角色權限不足","僅 Editor 可新增 FAQ。");
+        return;
+      }
+      if(!requireAuth(id ? "編輯 FAQ" : "新增 FAQ")) return;
       editingId = id || null;
       const faq = id ? state.faqs.find(f=>f.id===id) : {
-        biz:"企金",aspect:"法規面",category:"KYC/CDD",owner:"王小明｜AML 政策科",
+        biz:"企金",aspect:"法規面",category:"KYC/CDD",owner:CURRENT_EDITOR_NAME,
         status:"draft",version:"v0.1",updated:"",effective:todayText,nextReview:"2027-07-27",
         q:{zh:"",en:"",ja:""},a:{zh:"",en:"",ja:""},ref:{zh:"",en:"",ja:""},
         source:"",article:"",link:""
@@ -3030,7 +3329,8 @@
       if(!faq.nextReview) missing.push("下次檢視日");
       return missing;
     }
-    function saveEditor(sendReview){
+    async function saveEditor(sendReview){
+      if(!requireAuth(sendReview ? "送交覆核" : "儲存 FAQ")) return;
       const faq = collectEditor(sendReview ? "pending" : "draft");
       const missing = validateFaq(faq);
       if(missing.length){
@@ -3059,8 +3359,12 @@
           current:faqSnapshot(faq)
         });
       }
-      persist();
+      persist({sync:false});
+      const synced = await syncFaqsToServer({faq});
       showToast(sendReview?"已送交覆核":"草稿已儲存",sendReview?"內容已進入 Reviewer 待審佇列；前台僅顯示已發布內容。":"後台資料已更新；發布後前台會顯示。");
+      if(HAS_SUPABASE_CONFIG && !synced){
+        showToast("已暫存在本機","Supabase 尚未同步，請確認登入與網路狀態。");
+      }
       updateCounts();
       if(sendReview) showScreen("review"); else startEditor(faq.id);
     }
@@ -3153,14 +3457,15 @@
     }
     async function approveFaq(id){
       const role = document.getElementById("roleSelect").value;
-      if(!["reviewer","admin"].includes(role)){ showToast("角色權限不足","請將展示角色切換為 Reviewer 或 Administrator。"); return; }
+      if(!requireAuth("核准 FAQ")) return;
+      if(role!=="reviewer"){ showToast("角色權限不足","請將展示角色切換為 Reviewer。"); return; }
       const faq = state.faqs.find(f=>f.id===id);
       if(!faq) return;
       const previous = getPreviousFaq(faq);
       faq.status = "published";faq.updated = todayText;
       const current = faqSnapshot(faq);
       delete faq.previous;
-      addAudit("核准並發布內容",faq.id+" "+faq.version,"覆核者（Demo）");
+      addAudit("核准並發布內容",faq.id+" "+faq.version,currentAuditUser());
       state.versions.unshift({
         version:faq.version,
         title:faq.q.zh+"—完成覆核並發布",
@@ -3177,7 +3482,8 @@
     }
     function returnFaq(id){
       const role = document.getElementById("roleSelect").value;
-      if(!["reviewer","admin"].includes(role)){ showToast("角色權限不足","請將展示角色切換為 Reviewer 或 Administrator。"); return; }
+      if(!requireAuth("退回 FAQ")) return;
+      if(role!=="reviewer"){ showToast("角色權限不足","請將展示角色切換為 Reviewer。"); return; }
       const faq = state.faqs.find(f=>f.id===id);
       if(!faq) return;
       openModal("退回內容｜"+faq.id,
@@ -3185,22 +3491,74 @@
         '<button class="btn btn-secondary" type="button" data-action="close-modal">取消</button><button class="btn btn-danger-soft" type="button" data-confirm-return="'+faq.id+'">確認退回</button>'
       );
     }
-    function confirmReturn(id){
+    async function confirmReturn(id){
+      if(!requireAuth("退回 FAQ")) return;
       const faq = state.faqs.find(f=>f.id===id);
       if(!faq) return;
       faq.status="draft";faq.updated=todayText;
-      addAudit("退回修改",faq.id+" "+faq.version,"覆核者（Demo）");
-      persist();closeModal();renderReviewList();showToast("內容已退回","Editor 可依覆核意見修改後再次送審。");
+      addAudit("退回修改",faq.id+" "+faq.version,currentAuditUser());
+      persist({sync:false});
+      await syncFaqsToServer({faq});
+      closeModal();renderReviewList();showToast("內容已退回","Editor 可依覆核意見修改後再次送審。");
+    }
+    function requestDeleteFaq(id){
+      if(!requireAuth("刪除 FAQ")) return;
+      const faq = state.faqs.find(f=>f.id===id);
+      if(!faq) return;
+      if(!canDeleteFaq(faq)){
+        showToast("角色權限不足","Editor 只能刪除自己建立且尚未發布的 draft／pending 題目；Reviewer 可刪除所有狀態。");
+        return;
+      }
+      openModal("刪除問題｜"+faq.id,
+        '<p style="font-size:13px;line-height:1.8;margin:0 0 12px">確定要刪除這一題嗎？</p>'+
+        '<div class="source-box"><div class="source-title">'+escapeHtml(faq.q.zh || faq.id)+'</div><div class="hint" style="margin-top:8px">此專案採軟刪除：資料會保留並標記為已刪除，前台不再顯示，稽核紀錄會保留。</div></div>',
+        '<button class="btn btn-secondary" type="button" data-action="close-modal">取消</button><button class="btn btn-danger-soft" type="button" data-confirm-delete="'+faq.id+'">確認刪除</button>'
+      );
+    }
+    async function confirmDeleteFaq(id){
+      if(!requireAuth("刪除 FAQ")) return;
+      const faq = state.faqs.find(f=>f.id===id);
+      if(!faq) return;
+      if(!canDeleteFaq(faq)){
+        closeModal();
+        showToast("角色權限不足","目前角色不能刪除這一題。");
+        return;
+      }
+      const previous = getPreviousFaq(faq);
+      faq.status = "deleted";
+      faq.updated = todayText;
+      faq.deletedAt = new Date().toISOString();
+      faq.deletedBy = currentAuditUser();
+      addAudit("刪除問題",faq.id+" "+faq.version,currentAuditUser());
+      state.versions.unshift({
+        version:faq.version,
+        title:faq.q.zh+"—刪除問題",
+        meta:faq.id+"｜"+todayText+"｜已刪除",
+        faqId:faq.id,
+        previous:previous ? faqSnapshot(previous) : null,
+        current:faqSnapshot(faq)
+      });
+      persist({sync:false});
+      const synced = await syncFaqsToServer({faq});
+      closeModal();
+      refreshCurrentScreen();
+      showToast("問題已刪除",synced ? "前台不會再顯示此題。" : "已暫存在本機；請確認 Supabase 同步狀態。");
     }
     function showPermission(){
+      if(!isReviewer()){
+        showToast("角色權限不足","角色與權限設定僅限 Reviewer。");
+        return;
+      }
       openModal("角色與權限",
-        '<div class="table-wrap"><table style="min-width:620px"><thead><tr><th>功能</th><th>Editor</th><th>Reviewer</th><th>Administrator</th></tr></thead><tbody>'+
-        '<tr><td>建立／修改 FAQ</td><td>?</td><td>檢視</td><td>?</td></tr>'+
-        '<tr><td>送交覆核</td><td>?</td><td>—</td><td>?</td></tr>'+
-        '<tr><td>核准／退回</td><td>—</td><td>?</td><td>?</td></tr>'+
-        '<tr><td>發布／下架</td><td>—</td><td>—</td><td>?</td></tr>'+
-        '<tr><td>角色與系統設定</td><td>—</td><td>—</td><td>?</td></tr>'+
-        '</tbody></table></div><div style="margin-top:14px;padding:13px;border-radius:10px;background:var(--yellow-100);font-size:11px;line-height:1.6">Maker–Checker 原則：內容建立者不得核准自己建立的 FAQ；正式系統應以公司 SSO 身分與後端權限強制執行。</div>',
+        '<div class="table-wrap"><table style="min-width:520px"><thead><tr><th>功能</th><th>Editor</th><th>Reviewer</th></tr></thead><tbody>'+
+        '<tr><td>新增 FAQ</td><td>可</td><td>不可</td></tr>'+
+        '<tr><td>編輯既有 FAQ</td><td>可</td><td>可</td></tr>'+
+        '<tr><td>送交覆核</td><td>可</td><td>不可</td></tr>'+
+        '<tr><td>核准／退回</td><td>不可</td><td>可</td></tr>'+
+        '<tr><td>正式發布</td><td>不可</td><td>可</td></tr>'+
+        '<tr><td>刪除問題</td><td>限自己建立且 draft／pending</td><td>可刪除任何狀態</td></tr>'+
+        '<tr><td>角色與權限設定</td><td>不可</td><td>可</td></tr>'+
+        '</tbody></table></div><div style="margin-top:14px;padding:13px;border-radius:10px;background:var(--yellow-100);font-size:11px;line-height:1.6">Maker–Checker 原則：Editor 負責建立與送審，Reviewer 負責退回、核准、發布與必要刪除；正式系統應以公司 SSO 身分與後端權限強制執行。</div>',
         '<button class="btn btn-secondary" type="button" data-action="close-modal">關閉</button>',true
       );
     }
@@ -3210,19 +3568,25 @@
         '<button class="btn btn-secondary" type="button" data-action="close-modal">取消</button><button class="btn btn-danger-soft" type="button" data-action="confirm-reset">確認重設</button>'
       );
     }
-    function confirmReset(){
-      state=clone(seedData);persist();closeModal();renderDashboard();showScreen("dashboard");showToast("示範資料已重設","已恢復最初的 FAQ、版本與操作紀錄。");
+    async function confirmReset(){
+      if(HAS_SUPABASE_CONFIG && !requireAuth("重設示範資料")) return;
+      state=clone(seedData);
+      persist({sync:false});
+      const synced = await syncFaqsToServer();
+      closeModal();renderDashboard();showScreen("dashboard");
+      showToast("示範資料已重設",synced ? "已恢復最初的 FAQ，並同步至 Supabase。" : "已恢復本機示範資料。");
     }
     async function publishFaq(id){
       const role = document.getElementById("roleSelect").value;
-      if(role!=="admin"){ showToast("角色權限不足","正式發布僅限 Administrator。"); return; }
+      if(!requireAuth("發布 FAQ")) return;
+      if(role!=="reviewer"){ showToast("角色權限不足","正式發布僅限 Reviewer。"); return; }
       const faq=state.faqs.find(f=>f.id===id);
       if(!faq || faq.status!=="approved") return;
       const previous = getPreviousFaq(faq);
       faq.status="published";faq.updated=todayText;
       const current = faqSnapshot(faq);
       delete faq.previous;
-      addAudit("發布內容",faq.id+" "+faq.version,"系統管理者（Demo）");
+      addAudit("發布內容",faq.id+" "+faq.version,currentAuditUser());
       state.versions.unshift({
         version:faq.version,
         title:faq.q.zh+"—發布內容",
@@ -3244,6 +3608,8 @@
         const action=actionBtn.dataset.action;
         if(action==="new-faq") startEditor();
         if(action==="close-modal") closeModal();
+        if(action==="login") openLoginModal();
+        if(action==="confirm-login") confirmLogin();
         if(action==="show-permission") showPermission();
         if(action==="reset-demo") resetDemo();
         if(action==="confirm-reset") confirmReset();
@@ -3259,10 +3625,14 @@
       if(approve){approveFaq(approve.dataset.approveId);return;}
       const publish=event.target.closest("[data-publish-id]");
       if(publish){publishFaq(publish.dataset.publishId);return;}
+      const deleteBtn=event.target.closest("[data-delete-id]");
+      if(deleteBtn){requestDeleteFaq(deleteBtn.dataset.deleteId);return;}
       const returnBtn=event.target.closest("[data-return-id]");
       if(returnBtn){returnFaq(returnBtn.dataset.returnId);return;}
       const confirmReturnBtn=event.target.closest("[data-confirm-return]");
       if(confirmReturnBtn){confirmReturn(confirmReturnBtn.dataset.confirmReturn);return;}
+      const confirmDeleteBtn=event.target.closest("[data-confirm-delete]");
+      if(confirmDeleteBtn){confirmDeleteFaq(confirmDeleteBtn.dataset.confirmDelete);return;}
       const version=event.target.closest("[data-version-index]");
       if(version){
         const item=state.versions[Number(version.dataset.versionIndex)];
@@ -3275,6 +3645,8 @@
     document.getElementById("statusFilter").addEventListener("change",renderFaqTable);
     document.getElementById("bizFilter").addEventListener("change",renderFaqTable);
     document.getElementById("roleSelect").addEventListener("change",()=>{
+      updateRoleUi();
+      if(currentScreen==="content") renderFaqTable();
       if(currentScreen==="review") renderReviewList();
       showToast("展示角色已切換",document.getElementById("roleSelect").selectedOptions[0].textContent);
     });
@@ -3289,7 +3661,7 @@
 
     document.getElementById("frontLink").href = getFrontendUrl();
     renderDashboard();
-    loadFaqsFromServer();
+    initAuth().then(()=>loadFaqsFromServer());
   </script>
 </body>
 </html>
