@@ -507,6 +507,12 @@
     .compare-col{border:1px solid var(--line);border-radius:12px;overflow:hidden}
     .compare-head{padding:11px 13px;background:var(--surface-soft);font-size:11px;font-weight:850}
     .compare-body{padding:14px;font-size:12px;line-height:1.65;white-space:pre-line}
+    .compare-field{padding:10px 0;border-bottom:1px solid var(--line)}
+    .compare-field:first-child{padding-top:0}
+    .compare-field:last-child{border-bottom:0;padding-bottom:0}
+    .compare-field-label{display:block;margin-bottom:5px;color:var(--muted);font-size:10px;font-weight:850;letter-spacing:.04em}
+    .compare-field-value{display:block;min-height:18px;white-space:pre-line;word-break:break-word}
+    .compare-field-value.is-empty{color:var(--muted)}
     .diff-remove{background:#fde9e9;color:#8c3838;text-decoration:line-through}
     .diff-add{background:#e3f6e9;color:#17653b}
     .toast{
@@ -3390,17 +3396,34 @@
         '<button class="btn btn-secondary" type="button" data-action="close-modal">關閉預覽</button>',true
       );
     }
+    const COMPARE_FIELDS = [
+      {label:"中文答案", get:faq=>faq?.a?.zh || ""},
+      {label:"中文引用文字", get:faq=>faq?.ref?.zh || ""},
+      {label:"來源文件", get:faq=>faq?.source || ""},
+      {label:"條次／章節", get:faq=>faq?.article || ""},
+      {label:"行內正式文件連結", get:faq=>faq?.link || ""}
+    ];
+    function renderCompareFields(record, counterpart, mode){
+      return COMPARE_FIELDS.map(field=>{
+        const value = field.get(record);
+        const otherValue = field.get(counterpart);
+        const changed = String(value || "") !== String(otherValue || "");
+        const diffClass = changed ? (mode==="old" ? " diff-remove" : " diff-add") : "";
+        const emptyClass = value ? "" : " is-empty";
+        return '<div class="compare-field">'+
+          '<span class="compare-field-label">'+escapeHtml(field.label)+'</span>'+
+          '<span class="compare-field-value'+diffClass+emptyClass+'">'+escapeHtml(value || "未填寫")+'</span>'+
+        '</div>';
+      }).join("");
+    }
     function compareFaq(faq){
       if(!faq) return;
       const previous = getPreviousFaq(faq);
-      const oldText = previous?.a?.zh || "新增 FAQ，無前一版本。";
-      const newText = faq.a?.zh || "";
-      const oldClass = previous ? "diff-remove" : "";
       const previousVersion = previous?.version ? " "+previous.version : "";
       openModal("版本差異｜"+faq.id,
-        '<div class="compare-grid"><div class="compare-col"><div class="compare-head">前一版本'+escapeHtml(previousVersion)+'</div><div class="compare-body"><span class="'+oldClass+'">'+escapeHtml(oldText)+'</span></div></div>'+
-        '<div class="compare-col"><div class="compare-head">送審版本 '+escapeHtml(faq.version)+'</div><div class="compare-body"><span class="diff-add">'+escapeHtml(newText)+'</span></div></div></div>'+
-        '<div style="margin-top:16px;padding:13px;border-radius:10px;background:var(--surface-soft);font-size:11px;line-height:1.6"><strong>變更摘要：</strong>補充風險判斷、必要留存資訊及升級處理原則；正式發布前仍須核對引用文件版本。</div>',
+        '<div class="compare-grid"><div class="compare-col"><div class="compare-head">前一版本'+escapeHtml(previousVersion)+'</div><div class="compare-body">'+renderCompareFields(previous,faq,"old")+'</div></div>'+
+        '<div class="compare-col"><div class="compare-head">送審版本 '+escapeHtml(faq.version)+'</div><div class="compare-body">'+renderCompareFields(faq,previous,"new")+'</div></div></div>'+
+        '<div style="margin-top:16px;padding:13px;border-radius:10px;background:var(--surface-soft);font-size:11px;line-height:1.6"><strong>變更摘要：</strong>請依上方欄位差異核對答案、引用依據與行內正式文件連結；正式發布前仍須確認引用文件版本。</div>',
         '<button class="btn btn-secondary" type="button" data-action="close-modal">關閉</button>',true
       );
     }
@@ -3444,14 +3467,18 @@
         }
       }
 
-      const oldText = previous?.a?.zh || (isPublishedRecord ? "此舊版本紀錄建立時尚未保存前一版答案快照。" : "新增 FAQ，無前一版本。");
-      const newText = current?.a?.zh || item.title || "";
       const previousVersion = previous?.version ? " "+previous.version : "";
       const currentVersion = current?.version || item.version || "";
+      const previousBody = previous
+        ? renderCompareFields(previous,current,"old")
+        : '<span class="compare-field-value is-empty">'+escapeHtml(isPublishedRecord ? "此舊版本紀錄建立時尚未保存前一版快照。" : "新增 FAQ，無前一版本。")+'</span>';
+      const currentBody = current
+        ? renderCompareFields(current,previous,"new")
+        : '<span class="compare-field-value is-empty">'+escapeHtml(item.title || "無版本內容。")+'</span>';
 
       openModal(title,
-        '<div class="compare-grid"><div class="compare-col"><div class="compare-head">前一版本'+escapeHtml(previousVersion)+'</div><div class="compare-body"><span class="'+(previous?'diff-remove':'')+'">'+escapeHtml(oldText)+'</span></div></div>'+
-        '<div class="compare-col"><div class="compare-head">'+escapeHtml(isPublishedRecord ? "發布版本 "+currentVersion : "送審版本 "+currentVersion)+'</div><div class="compare-body"><span class="diff-add">'+escapeHtml(newText)+'</span></div></div></div>',
+        '<div class="compare-grid"><div class="compare-col"><div class="compare-head">前一版本'+escapeHtml(previousVersion)+'</div><div class="compare-body">'+previousBody+'</div></div>'+
+        '<div class="compare-col"><div class="compare-head">'+escapeHtml(isPublishedRecord ? "發布版本 "+currentVersion : "送審版本 "+currentVersion)+'</div><div class="compare-body">'+currentBody+'</div></div></div>',
         '<button class="btn btn-secondary" type="button" data-action="close-modal">關閉</button>',true
       );
     }
