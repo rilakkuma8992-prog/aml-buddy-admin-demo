@@ -2800,6 +2800,9 @@
         .order("id",{ascending:true});
       if(error) throw error;
       const serverFaqs = (data || []).map(normalizeSupabaseFaqRow);
+      if(serverFaqs.length===0){
+        return false;
+      }
       const serverIds = new Set(serverFaqs.map(faq=>faq.id));
       const localEditable = state.faqs.filter(faq =>
         !serverIds.has(faq.id) && ["draft","pending","approved"].includes(faq.status)
@@ -2821,12 +2824,12 @@
         showToast("請先登入","登入後才能寫入共用題庫。");
         return false;
       }
-      const faqs = options.faq ? [options.faq] : state.faqs;
+      const faqs = options.faqs || (options.faq ? [options.faq] : state.faqs);
       const rows = faqs.map(makeSupabaseFaqRow);
-      if(rows.length===0) return true;
+      if(rows.length===0) return {ok:true,count:0};
       const {error} = await supabaseClient.from(SUPABASE_TABLE).upsert(rows,{onConflict:"id"});
       if(error) throw error;
-      return true;
+      return {ok:true,count:rows.length};
     }
     async function syncAuditToSupabase(item){
       if(!supabaseClient || !isAuthenticated()) return;
@@ -2971,11 +2974,11 @@
     async function syncFaqsToServer(options = {}){
       if(HAS_SUPABASE_CONFIG){
         try{
-          const synced = await syncFaqsToSupabase(options);
-          if(options.toast && synced){
-            showToast("已同步至 Supabase","共用題庫資料已更新。");
+          const result = await syncFaqsToSupabase(options);
+          if(options.toast && result?.ok){
+            showToast("已同步至 Supabase","共用題庫資料已更新 "+result.count+" 筆。");
           }
-          return synced;
+          return Boolean(result?.ok);
         }catch(error){
           console.warn("syncFaqsToSupabase failed",error);
           if(options.toast){
@@ -3599,9 +3602,19 @@
       if(HAS_SUPABASE_CONFIG && !requireAuth("重設示範資料")) return;
       state=clone(seedData);
       persist({sync:false});
-      const synced = await syncFaqsToServer();
+      let syncResult = {ok:false,count:0};
+      if(HAS_SUPABASE_CONFIG){
+        try{
+          syncResult = await syncFaqsToSupabase({faqs:state.faqs});
+        }catch(error){
+          console.warn("reset sync failed",error);
+          syncResult = {ok:false,count:0,error};
+        }
+      }else{
+        syncResult = {ok:await syncFaqsToServer(),count:state.faqs.length};
+      }
       closeModal();renderDashboard();showScreen("dashboard");
-      showToast("示範資料已重設",synced ? "已恢復最初的 FAQ，並同步至 Supabase。" : "已恢復本機示範資料。");
+      showToast("示範資料已重設",syncResult.ok ? "已同步至 Supabase："+syncResult.count+" 筆 FAQ。" : "已恢復本機示範資料；尚未同步至 Supabase。"+(syncResult.error?.message ? "錯誤："+syncResult.error.message : "請檢查登入狀態與 RLS 權限。"));
     }
     async function publishFaq(id){
       const role = document.getElementById("roleSelect").value;
