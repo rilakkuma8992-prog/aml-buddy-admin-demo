@@ -2775,6 +2775,7 @@
       const payload = faqSnapshot(faq);
       payload.status = faq.status;
       if(faq.previous) payload.previous = faqSnapshot(faq.previous);
+      const dateValue = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? value : null;
       return {
         id:faq.id,
         status:faq.status,
@@ -2783,9 +2784,9 @@
         category:faq.category,
         owner:faq.owner,
         version:faq.version,
-        updated_on:faq.updated || null,
-        effective:faq.effective || null,
-        next_review:faq.nextReview || null,
+        updated_on:dateValue(faq.updated),
+        effective:dateValue(faq.effective),
+        next_review:dateValue(faq.nextReview),
         payload,
         deleted_at:faq.status==="deleted" ? (faq.deletedAt || new Date().toISOString()) : null,
         updated_by:currentUser?.id || null,
