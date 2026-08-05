@@ -150,6 +150,13 @@
       backdrop-filter:blur(12px);
     }
     .mobile-menu{display:none}
+    .mobile-menu span{
+      width:30px;height:3px;border-radius:999px;background:#52605a;
+    }
+    .mobile-menu span + span{margin-top:8px}
+    .admin-menu-handle,
+    .admin-menu-close,
+    .admin-menu-backdrop{display:none}
     .page-heading{min-width:0}
     .page-kicker{color:var(--muted);font-size:11px;letter-spacing:.08em}
     .page-title{margin:2px 0 0;font-size:20px;line-height:1.2}
@@ -541,12 +548,60 @@
     }
     @media (max-width:800px){
       :root{--sidebar:0px}
-      .sidebar{transform:translateX(-100%);transition:.22s ease;width:248px}
-      .sidebar.is-open{transform:translateX(0)}
+      .sidebar{
+        inset:auto 10px 0 10px;
+        width:auto;
+        max-height:min(76svh,720px);
+        border-radius:28px 28px 0 0;
+        overflow:hidden;
+        transform:translateY(108%);
+        transition:transform .26s cubic-bezier(.22,.85,.25,1);
+        z-index:60;
+      }
+      .sidebar.is-open{transform:translateY(0)}
+      .admin-menu-backdrop{
+        position:fixed;inset:0;z-index:55;
+        display:block;
+        background:rgba(5,21,38,.46);
+        opacity:0;
+        pointer-events:none;
+        transition:opacity .22s ease;
+      }
+      .sidebar.is-open + .admin-menu-backdrop{
+        opacity:1;
+        pointer-events:auto;
+      }
+      body.is-admin-menu-open{overflow:hidden}
+      .admin-menu-handle{
+        display:block;
+        width:54px;height:5px;margin:14px auto 4px;
+        border-radius:999px;background:rgba(255,255,255,.36);
+        flex:0 0 5px;
+      }
+      .admin-menu-close{
+        position:relative;
+        display:block;
+        width:46px;height:46px;
+        margin-left:auto;
+        border:0;background:transparent;
+      }
+      .admin-menu-close span{
+        position:absolute;left:9px;top:22px;
+        width:28px;height:3px;border-radius:999px;
+        background:rgba(255,255,255,.78);
+      }
+      .admin-menu-close span:first-child{transform:rotate(45deg)}
+      .admin-menu-close span:last-child{transform:rotate(-45deg)}
+      .sidebar .brand{padding:8px 18px 14px}
+      .nav{
+        overflow:auto;
+        padding-bottom:max(20px,env(safe-area-inset-bottom));
+      }
       .main{margin-left:0}
       .mobile-menu{
-        display:grid;place-items:center;width:38px;height:38px;
-        border:1px solid var(--line);border-radius:9px;background:#fff;
+        display:grid;place-items:center;width:48px;height:48px;
+        flex:0 0 48px;
+        border:0;border-radius:9px;background:transparent;
       }
       .topbar{height:68px;padding:0 16px}
       .content{padding:18px 15px 32px}
@@ -584,12 +639,17 @@
 <body>
   <div class="app">
     <aside class="sidebar" id="sidebar" aria-label="主要選單">
+      <div class="admin-menu-handle" aria-hidden="true"></div>
       <div class="brand">
         <div class="brand-mark">AB</div>
         <div>
           <div class="brand-title">AML Buddy</div>
           <div class="brand-sub">CONTENT ADMIN</div>
         </div>
+        <button class="admin-menu-close" id="adminMenuClose" type="button" aria-label="關閉選單">
+          <span></span>
+          <span></span>
+        </button>
       </div>
       <nav class="nav">
         <div class="nav-label">內容管理</div>
@@ -625,10 +685,15 @@
         </div>
       </div>
     </aside>
+    <div class="admin-menu-backdrop" id="adminMenuBackdrop" aria-hidden="true"></div>
 
     <main class="main">
       <header class="topbar">
-        <button class="mobile-menu" id="mobileMenu" type="button" aria-label="開啟選單">?</button>
+        <button class="mobile-menu" id="mobileMenu" type="button" aria-label="開啟選單" aria-expanded="false">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
         <div class="page-heading">
           <div class="page-kicker">AML 知識管理與問答平台</div>
           <h1 class="page-title" id="pageTitle">內容治理總覽</h1>
@@ -1040,7 +1105,7 @@
       auditTable: "aml_buddy_audit_logs"
     };
   </script>
-  <script src="./vendor/supabase-js.js"></script>
+  <script src="./vendor/supabase-js.js?v=20260804-2"></script>
   <script>
     "use strict";
 
@@ -3169,7 +3234,7 @@
         btn.classList.toggle("is-active",btn.dataset.screen===name || (name==="editor" && btn.dataset.screen==="content"));
       });
       document.getElementById("pageTitle").textContent = SCREEN_TITLES[name] || "AML Buddy";
-      document.getElementById("sidebar").classList.remove("is-open");
+      closeAdminMenu();
       if(name==="dashboard") renderDashboard();
       if(name==="content") renderFaqTable();
       if(name==="review") renderReviewList();
@@ -3681,7 +3746,36 @@
       }
     });
 
-    document.getElementById("mobileMenu").addEventListener("click",()=>document.getElementById("sidebar").classList.toggle("is-open"));
+    function syncAdminMenuButton(){
+      const sidebar = document.getElementById("sidebar");
+      const button = document.getElementById("mobileMenu");
+      if(button){
+        const isOpen = sidebar.classList.contains("is-open");
+        button.setAttribute("aria-expanded",String(isOpen));
+        button.setAttribute("aria-label",isOpen ? "關閉選單" : "開啟選單");
+      }
+    }
+    function openAdminMenu(){
+      document.getElementById("sidebar").classList.add("is-open");
+      document.body.classList.add("is-admin-menu-open");
+      syncAdminMenuButton();
+    }
+    function closeAdminMenu(){
+      document.getElementById("sidebar").classList.remove("is-open");
+      document.body.classList.remove("is-admin-menu-open");
+      syncAdminMenuButton();
+    }
+    function toggleAdminMenu(){
+      if(document.getElementById("sidebar").classList.contains("is-open")){
+        closeAdminMenu();
+      }else{
+        openAdminMenu();
+      }
+    }
+
+    document.getElementById("mobileMenu").addEventListener("click",toggleAdminMenu);
+    document.getElementById("adminMenuClose").addEventListener("click",closeAdminMenu);
+    document.getElementById("adminMenuBackdrop").addEventListener("click",closeAdminMenu);
     document.getElementById("faqSearch").addEventListener("input",renderFaqTable);
     document.getElementById("statusFilter").addEventListener("change",renderFaqTable);
     document.getElementById("bizFilter").addEventListener("change",renderFaqTable);
@@ -3698,7 +3792,12 @@
     document.getElementById("saveDraftBtn").addEventListener("click",()=>saveEditor(false));
     document.getElementById("submitReviewBtn").addEventListener("click",()=>saveEditor(true));
     document.getElementById("previewFaqBtn").addEventListener("click",()=>previewFaq(collectEditor()));
-    document.addEventListener("keydown",event=>{if(event.key==="Escape") closeModal();});
+    document.addEventListener("keydown",event=>{
+      if(event.key==="Escape"){
+        closeModal();
+        closeAdminMenu();
+      }
+    });
 
     document.getElementById("frontLink").href = getFrontendUrl();
     renderDashboard();
